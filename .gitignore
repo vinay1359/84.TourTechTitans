@@ -60,7 +60,7 @@ coverage.xml
 *.log
 .pytest_cache/
 htmlcov/
-
+flask_backend/.env
 # Flask
 instance/
 .webassets-cache
