@@ -6,9 +6,10 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@types/leaflet": "^1.9.17",
     "date-fns": "^4.1.0",
     "leaflet": "^1.9.4",

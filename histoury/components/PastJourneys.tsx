@@ -154,7 +154,8 @@ export default function PastJourneys() {
 
       // Custom styled marker setup
       import("leaflet").then((L) => {
-        delete L.Icon.Default.prototype._getIconUrl;
+        delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })
+          ._getIconUrl;
 
         // Create custom amber-colored marker icon that matches the site theme
         const customIcon = new L.Icon({
@@ -279,14 +280,6 @@ export default function PastJourneys() {
         new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
     )
     .map((journey) => [journey.lat, journey.lng] as [number, number]);
-
-  // Function to calculate an appropriate zoom level based on the marker positions
-  const getAppropriateZoom = (positions: [number, number][]) => {
-    if (positions.length <= 1) return 10; // Single place
-    if (positions.length <= 3) return 4; // Few places
-    if (positions.length <= 8) return 3; // Several places
-    return 2; // Many places
-  };
 
   if (loading) {
     return (
@@ -429,7 +422,7 @@ export default function PastJourneys() {
                         </p>
                         {journey.description && (
                           <p className="text-xs mt-1 max-w-xs text-gray-600 line-clamp-2 italic">
-                            "{journey.description}"
+                            &quot;{journey.description}&quot;
                           </p>
                         )}
                       </div>

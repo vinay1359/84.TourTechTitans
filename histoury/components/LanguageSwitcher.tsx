@@ -5,7 +5,24 @@ import { useEffect } from "react";
 declare global {
   interface Window {
     googleTranslateElementInit: () => void;
-    google: any;
+    google: {
+      translate: {
+        TranslateElement: {
+          new (
+            options: {
+              pageLanguage: string;
+              includedLanguages: string;
+              layout: unknown;
+              autoDisplay: boolean;
+            },
+            elementId: string
+          ): unknown;
+          InlineLayout: {
+            SIMPLE: unknown;
+          };
+        };
+      };
+    };
   }
 }
 

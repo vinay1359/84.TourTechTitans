@@ -5,9 +5,11 @@ import {
   useContext,
   useState,
   useEffect,
+  useCallback,
   ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
+import { API_URL } from "@/app/utils/api";
 
 interface User {
   user_id: string;
@@ -21,7 +23,7 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   logout: () => void;
-  setAuthToken: (token: string) => void;
+  setAuthToken: (token?: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -48,27 +50,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setMounted(true);
   }, []);
 
-  const setAuthToken = (token: string) => {
-    localStorage.setItem("authToken", token);
-    loadUserFromToken();
-  };
-
-  const loadUserFromToken = async () => {
+  const loadUserFromToken = useCallback(async () => {
     if (!mounted) return;
 
-    const token = localStorage.getItem("authToken");
-
-    if (!token) {
-      setIsLoading(false);
-      setUser(null);
-      return;
-    }
-
     try {
-      const response = await fetch("http://localhost:5000/auth/user", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      const response = await fetch(`${API_URL}/auth/user`, {
+        credentials: "include",
       });
 
       if (!response.ok) {
@@ -79,46 +66,42 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(userData);
     } catch (error) {
       console.error("Failed to load user:", error);
-      localStorage.removeItem("authToken");
       setUser(null);
     } finally {
       setIsLoading(false);
     }
+  }, [mounted]);
+
+  const setAuthToken = () => {
+    loadUserFromToken();
   };
 
   useEffect(() => {
     loadUserFromToken();
-  }, [mounted]);
+  }, [loadUserFromToken]);
 
   const logout = async () => {
     try {
       setIsLoading(true);
-      const token = localStorage.getItem("authToken");
 
       // Clear auth state first
-      localStorage.removeItem("authToken");
       setUser(null);
 
-      // Try to call logout endpoint if token exists
-      if (token) {
-        try {
-          const response = await fetch("http://localhost:5000/auth/logout", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
+      try {
+        const response = await fetch(`${API_URL}/auth/logout`, {
+          method: "POST",
+          credentials: "include",
+        });
 
-          if (!response.ok) {
-            console.warn(
-              "Logout endpoint returned non-OK status:",
-              response.status
-            );
-          }
-        } catch (error) {
-          console.warn("Error calling logout endpoint:", error);
-          // Continue with logout even if the endpoint call fails
+        if (!response.ok) {
+          console.warn(
+            "Logout endpoint returned non-OK status:",
+            response.status
+          );
         }
+      } catch (error) {
+        console.warn("Error calling logout endpoint:", error);
+        // Continue with logout even if the endpoint call fails
       }
 
       // Redirect to login page

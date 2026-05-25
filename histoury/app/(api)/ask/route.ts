@@ -3,6 +3,19 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 export async function POST(req: Request) {
   try {
     const { prompt, language = "en" } = await req.json();
+    if (typeof prompt !== "string" || prompt.trim().length === 0) {
+      return new Response(JSON.stringify({ error: "Prompt is required." }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (prompt.length > 2000) {
+      return new Response(JSON.stringify({ error: "Prompt is too long." }), {
+        status: 413,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     if (!process.env.GEMINI_API_KEY) {
       console.error("GEMINI_API_KEY is not defined in environment variables");
@@ -37,16 +50,13 @@ export async function POST(req: Request) {
         systemPrompt += "Respond in English language.";
     }
 
-    console.log("Sending request to Gemini with prompt:", prompt);
-    console.log("System prompt:", systemPrompt);
-
     try {
       // Generate the response
       const result = await model.generateContent({
         contents: [
           {
             role: "user",
-            parts: [{ text: `${systemPrompt}\n\nUser query: ${prompt}` }],
+            parts: [{ text: `${systemPrompt}\n\nUser query: ${prompt.trim()}` }],
           },
         ],
         generationConfig: {
@@ -56,8 +66,6 @@ export async function POST(req: Request) {
       });
 
       const response = result.response.text();
-      console.log("Received response from Gemini");
-
       return new Response(JSON.stringify({ result: response }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -65,12 +73,11 @@ export async function POST(req: Request) {
       console.error("Error generating content:", generationError);
       throw generationError;
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error in API route:", error);
     return new Response(
       JSON.stringify({
         error: "An error occurred during your request.",
-        details: error.message || "Unknown error",
       }),
       {
         status: 500,

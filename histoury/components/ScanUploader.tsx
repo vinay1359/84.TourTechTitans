@@ -2,6 +2,7 @@
 
 import { useRef, useState, DragEvent, ChangeEvent, useEffect } from "react";
 import Image from "next/image";
+import { API_URL } from "@/app/utils/api";
 
 // Add Camera icon import
 import { Camera } from "lucide-react";
@@ -55,9 +56,10 @@ export default function ScanUploader({
     formData.append("image", file);
 
     try {
-      const res = await fetch("http://localhost:8000/detect_landmark/", {
+      const res = await fetch(`${API_URL}/detect_landmark/`, {
         method: "POST",
         body: formData,
+        credentials: "include",
       });
 
       const data = await res.json();

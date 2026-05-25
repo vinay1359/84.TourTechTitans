@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createTrip } from "@/app/utils/api";
+import { API_URL, createTrip } from "@/app/utils/api";
 import {
   DayPicker,
   SelectRangeEventHandler,
@@ -12,7 +12,7 @@ import { format } from "date-fns";
 import "react-day-picker/dist/style.css";
 
 // Custom CSS for date picker
-export default function AddTripPage() {
+function AddTripPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -37,7 +37,9 @@ export default function AddTripPage() {
   useEffect(() => {
     const checkBackend = async () => {
       try {
-        const response = await fetch("http://localhost:5000/");
+        const response = await fetch(`${API_URL}/`, {
+          credentials: "include",
+        });
         setBackendStatus(response.ok ? "online" : "offline");
       } catch (err) {
         console.error("Backend check failed:", err);
@@ -283,15 +285,6 @@ export default function AddTripPage() {
         place_name: placeName,
       };
 
-      console.log("Submitting trip data:", tripData);
-
-      // Check if authentication token exists
-      const token = localStorage.getItem("authToken");
-      if (!token) {
-        setError("You must be logged in to add trips. Please log in first.");
-        return;
-      }
-
       await createTrip(tripData);
       setSuccess(true);
 
@@ -519,5 +512,13 @@ export default function AddTripPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AddTripPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-amber-50" />}>
+      <AddTripPageContent />
+    </Suspense>
   );
 }

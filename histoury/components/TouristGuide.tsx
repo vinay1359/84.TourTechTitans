@@ -6,14 +6,12 @@ import StoryNarrator from "./StoryNarrator";
 
 export default function TouristGuide() {
   const [landmark, setLandmark] = useState<string | null>(null);
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
 
   return (
     <div className="p-6 space-y-10">
       <ScanUploader
-        onDetect={(landmark, coords) => {
+        onDetect={(landmark) => {
           setLandmark(landmark);
-          setCoords(coords);
         }}
       />
 

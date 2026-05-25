@@ -1,12 +1,14 @@
 import os
 import json
 import requests
-from flask import current_app, request, redirect, url_for
+from flask import current_app, request, redirect, url_for, session
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
+from urllib.parse import urlencode
+import secrets
 
 # Supabase client setup
 from supabase import create_client, Client
@@ -14,26 +16,43 @@ from supabase import create_client, Client
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
+AUTH_COOKIE_NAME = "auth_token"
+
+def cookie_secure():
+    return os.getenv("ENVIRONMENT", "development").lower() == "production"
 
 def get_google_provider_cfg():
-    return requests.get(os.getenv("GOOGLE_DISCOVERY_URL")).json()
+    discovery_url = os.getenv("GOOGLE_DISCOVERY_URL", "https://accounts.google.com/.well-known/openid-configuration")
+    return requests.get(discovery_url, timeout=10).json()
 
 def get_google_auth_url():
     # Get Google provider configuration
     google_provider_cfg = get_google_provider_cfg()
     authorization_endpoint = google_provider_cfg["authorization_endpoint"]
     
-    # Create the request URL
     redirect_uri = f"{request.base_url}/callback"
-    
-    # Build authorization URL
-    request_uri = f"{authorization_endpoint}?response_type=code&client_id={os.getenv('GOOGLE_CLIENT_ID')}&redirect_uri={redirect_uri}&scope=openid%20email%20profile"
-    
-    return request_uri
+    state = secrets.token_urlsafe(32)
+    session["oauth_state"] = state
+
+    params = {
+        "response_type": "code",
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "redirect_uri": redirect_uri,
+        "scope": "openid email profile",
+        "state": state,
+    }
+    return f"{authorization_endpoint}?{urlencode(params)}"
 
 def process_google_callback():
+    expected_state = session.pop("oauth_state", None)
+    received_state = request.args.get("state")
+    if not expected_state or not received_state or not secrets.compare_digest(expected_state, received_state):
+        return None, None
+
     # Get auth code from Google
     code = request.args.get("code")
+    if not code:
+        return None, None
     
     # Get token endpoint
     google_provider_cfg = get_google_provider_cfg()
@@ -50,8 +69,10 @@ def process_google_callback():
     }
     
     # Exchange auth code for tokens
-    token_response = requests.post(token_url, data=data)
+    token_response = requests.post(token_url, data=data, timeout=10)
     token_json = token_response.json()
+    if "id_token" not in token_json:
+        return None, None
     
     # Get user info
     id_info = id_token.verify_oauth2_token(
@@ -136,6 +157,8 @@ def token_required(f):
         auth_header = request.headers.get('Authorization')
         if auth_header and auth_header.startswith('Bearer '):
             token = auth_header.split(' ')[1]
+        elif request.cookies.get(AUTH_COOKIE_NAME):
+            token = request.cookies.get(AUTH_COOKIE_NAME)
         
         if not token:
             return {'message': 'Token is missing'}, 401
