@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useRouter } from "next/navigation";
+import { API_URL } from "@/app/utils/api";
+import Link from "next/link";
 
 export default function Login() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -15,7 +17,7 @@ export default function Login() {
   }, [isAuthenticated, isLoading, router]);
 
   const handleGoogleLogin = () => {
-    window.location.href = "http://localhost:5000/auth/login";
+    window.location.href = `${API_URL}/auth/login`;
   };
 
   return (
@@ -75,7 +77,7 @@ export default function Login() {
         
         <div className="mt-8 text-center">
           <p className="text-amber-600 text-sm">
-            New to Histoury? <a href="/" className="text-amber-800 font-semibold hover:underline">Learn more</a>
+            New to Histoury? <Link href="/" className="text-amber-800 font-semibold hover:underline">Learn more</Link>
           </p>
         </div>
       </div>

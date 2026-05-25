@@ -10,9 +10,6 @@ import StoryNarrator from "@/components/StoryNarrator";
 
 export default function ScanPage() {
   const [landmark, setLandmark] = useState<string | null>(null);
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
-    null
-  );
 
   return (
     <div className="min-h-screen bg-amber-50 py-16 px-4 space-y-10">
@@ -27,9 +24,8 @@ export default function ScanPage() {
       </div>
 
       <ScanUploader
-        onDetect={(name, coordinates) => {
+        onDetect={(name) => {
           setLandmark(name);
-          setCoords(coordinates);
         }}
       />
 

@@ -8,5 +8,5 @@ const ScanUploader = dynamic(() => import("./ScanUploader"), {
 });
 
 export default function ScanWrapper() {
-  return <ScanUploader />;
+  return <ScanUploader onDetect={() => {}} />;
 }

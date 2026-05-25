@@ -2,7 +2,7 @@
 import { useState } from "react";
 
 export default function Planning() {
-  const [plans, setPlans] = useState<string[]>([
+  const [plans] = useState<string[]>([
     "Trip to Hampi",
     "Jaipur in Summer",
   ]);

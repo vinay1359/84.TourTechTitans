@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Response, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Response, Header, Cookie
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, Any, List
@@ -10,6 +10,9 @@ from datetime import datetime, timedelta
 from functools import wraps
 import uuid
 import jwt
+from pathlib import Path
+from urllib.parse import urlencode
+import secrets
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from supabase import create_client, Client
@@ -27,9 +30,33 @@ from upload_and_summary.map_generator import generate_custom_leaflet_map_from_ap
 # Load environment variables
 load_dotenv()
 
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_FOLDER = BASE_DIR / os.getenv("UPLOAD_FOLDER", "uploads")
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_LANGUAGES = {"en", "hi", "kn", "ta", "te"}
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:5000").rstrip("/")
+AUTH_COOKIE_NAME = "auth_token"
+
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+SECRET_KEY = require_env("SECRET_KEY")
+if len(SECRET_KEY) < 32:
+    raise RuntimeError("SECRET_KEY must be at least 32 characters")
+
+def cookie_secure() -> bool:
+    return os.getenv("ENVIRONMENT", "development").lower() == "production"
+
 # Supabase client setup
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
+supabase_url = require_env("SUPABASE_URL")
+supabase_key = require_env("SUPABASE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
 
 # Create FastAPI app
@@ -38,37 +65,37 @@ app = FastAPI(title="Tourism App API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv('FRONTEND_URL', '*')],  # Fallback to allow all if not set
+    allow_origins=[FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Setup upload folder
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 # OAuth helper functions
 def get_google_provider_cfg():
-    return requests.get(os.getenv("GOOGLE_DISCOVERY_URL")).json()
+    discovery_url = os.getenv("GOOGLE_DISCOVERY_URL", "https://accounts.google.com/.well-known/openid-configuration")
+    return requests.get(discovery_url, timeout=10).json()
 
-def get_google_auth_url(request: Request):
+def get_google_auth_url(state: str):
     # Get Google provider configuration
     google_provider_cfg = get_google_provider_cfg()
     authorization_endpoint = google_provider_cfg["authorization_endpoint"]
-    
-    # Create the request URL - Correctly build the base URL from request components
-    base_url = f"{request.url.scheme}://{request.url.netloc}"
-    redirect_uri = f"{base_url}/auth/login/callback"
-    
-    # Build authorization URL
-    request_uri = f"{authorization_endpoint}?response_type=code&client_id={os.getenv('GOOGLE_CLIENT_ID')}&redirect_uri={redirect_uri}&scope=openid%20email%20profile"
-    
-    return request_uri
+
+    redirect_uri = f"{BACKEND_URL}/auth/login/callback"
+    params = {
+        "response_type": "code",
+        "client_id": require_env("GOOGLE_CLIENT_ID"),
+        "redirect_uri": redirect_uri,
+        "scope": "openid email profile",
+        "state": state,
+    }
+    return f"{authorization_endpoint}?{urlencode(params)}"
 
 def process_google_callback(request: Request):
     # Get auth code from Google
     code = request.query_params.get("code")
+    if not code:
+        return None, None
     
     # Get token endpoint
     google_provider_cfg = get_google_provider_cfg()
@@ -76,20 +103,18 @@ def process_google_callback(request: Request):
     
     # Prepare token request
     token_url = token_endpoint
-    # Fix base URL construction
-    base_url = f"{request.url.scheme}://{request.url.netloc}"
-    redirect_uri = f"{base_url}/auth/login/callback"
+    redirect_uri = f"{BACKEND_URL}/auth/login/callback"
     
     data = {
         'code': code,
-        'client_id': os.getenv('GOOGLE_CLIENT_ID'),
-        'client_secret': os.getenv('GOOGLE_CLIENT_SECRET'),
+        'client_id': require_env('GOOGLE_CLIENT_ID'),
+        'client_secret': require_env('GOOGLE_CLIENT_SECRET'),
         'redirect_uri': redirect_uri,
         'grant_type': 'authorization_code'
     }
     
     # Exchange auth code for tokens
-    token_response = requests.post(token_url, data=data)
+    token_response = requests.post(token_url, data=data, timeout=10)
     token_json = token_response.json()
     
     if 'id_token' not in token_json:
@@ -99,7 +124,7 @@ def process_google_callback(request: Request):
     id_info = id_token.verify_oauth2_token(
         token_json['id_token'],
         google_requests.Request(),
-        os.getenv('GOOGLE_CLIENT_ID')
+        require_env('GOOGLE_CLIENT_ID')
     )
     
     if id_info.get('email_verified'):
@@ -157,22 +182,80 @@ def create_auth_token(user):
         'exp': datetime.utcnow() + timedelta(days=7)
     }
     
-    token = jwt.encode(payload, os.getenv('SECRET_KEY'), algorithm='HS256')
+    token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
     return token
 
 def verify_auth_token(token):
     try:
-        payload = jwt.decode(token, os.getenv('SECRET_KEY'), algorithms=['HS256'])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
         return payload
     except:
         return None
 
+def safe_upload_name(original_name: Optional[str]) -> str:
+    suffix = Path(original_name or "").suffix.lower()
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
+        suffix = ".jpg"
+    return f"{uuid.uuid4().hex}{suffix}"
+
+async def save_image_upload(image: UploadFile) -> Path:
+    content_type = (image.content_type or "").lower()
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, or WebP images are allowed")
+
+    file_path = UPLOAD_FOLDER / safe_upload_name(image.filename)
+    total = 0
+    try:
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = await image.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Image is too large")
+                buffer.write(chunk)
+    except Exception:
+        if file_path.exists():
+            file_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await image.close()
+    return file_path
+
+def safe_audio_filename(landmark: str, language: str) -> str:
+    safe_landmark = "".join(ch if ch.isalnum() else "_" for ch in landmark).strip("_")[:80]
+    if not safe_landmark:
+        raise HTTPException(status_code=400, detail="Landmark name is invalid")
+    safe_language = language if language in ALLOWED_LANGUAGES else "en"
+    return f"summary_{safe_landmark}_{safe_language}.mp3"
+
+def resolve_upload_file(filename: str) -> Path:
+    basename = Path(filename).name
+    if not basename or basename != filename:
+        raise HTTPException(status_code=400, detail="Invalid file name")
+    candidate = (UPLOAD_FOLDER / basename).resolve()
+    upload_root = UPLOAD_FOLDER.resolve()
+    if upload_root not in candidate.parents and candidate != upload_root:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return candidate
+
 # FastAPI Dependency for authentication
-async def get_current_user(authorization: Optional[str] = Header(None)):
-    if not authorization or not authorization.startswith('Bearer '):
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+    auth_token: Optional[str] = Cookie(None, alias=AUTH_COOKIE_NAME),
+):
+    token = None
+    if authorization and authorization.startswith('Bearer '):
+        token = authorization.split(' ', 1)[1]
+    elif auth_token:
+        token = auth_token
+
+    if not token:
         raise HTTPException(status_code=401, detail="Token is missing")
-    
-    token = authorization.split(' ')[1]
+
     data = verify_auth_token(token)
     
     if not data:
@@ -193,19 +276,49 @@ async def index():
 @app.get("/auth/login")
 async def login(request: Request):
     """Redirect to Google OAuth login"""
-    auth_url = get_google_auth_url(request)
-    return RedirectResponse(auth_url)
+    state = secrets.token_urlsafe(32)
+    auth_url = get_google_auth_url(state)
+    response = RedirectResponse(auth_url)
+    response.set_cookie(
+        "oauth_state",
+        state,
+        max_age=600,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite="lax",
+    )
+    return response
 
 @app.get("/auth/login/callback")
 async def callback(request: Request):
     """Handle Google OAuth callback"""
+    expected_state = request.cookies.get("oauth_state")
+    received_state = request.query_params.get("state")
+    if not expected_state or not received_state or not secrets.compare_digest(expected_state, received_state):
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=invalid_state")
+
     user, token = process_google_callback(request)
     
     if not user or not token:
-        return RedirectResponse(f"{os.getenv('FRONTEND_URL')}/login?error=auth_failed")
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=auth_failed")
     
-    # Redirect to frontend with token
-    return RedirectResponse(f"{os.getenv('FRONTEND_URL')}/auth/callback?token={token}")
+    response = RedirectResponse(f"{FRONTEND_URL}/auth/callback")
+    response.delete_cookie("oauth_state")
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        token,
+        max_age=7 * 24 * 60 * 60,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite="lax",
+    )
+    return response
+
+@app.post("/auth/logout")
+async def logout():
+    response = JSONResponse({"message": "Logged out"})
+    response.delete_cookie(AUTH_COOKIE_NAME)
+    return response
 
 @app.get("/auth/user")
 async def get_user(current_user: Dict = Depends(get_current_user)):
@@ -220,38 +333,42 @@ async def verify_token(current_user: Dict = Depends(get_current_user)):
 # Backend functionality routes
 @app.post("/detect_landmark/")
 async def detect_landmark(image: UploadFile = File(...)):
-    file_path = os.path.join(UPLOAD_FOLDER, image.filename)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(image.file, buffer)
+    file_path = await save_image_upload(image)
 
-    vision_result = detect_landmark_google_vision(file_path)
+    vision_result = detect_landmark_google_vision(str(file_path))
     if vision_result:
         return vision_result
 
-    predicted, lat, lng = predict_landmark_custom_model(file_path)
+    predicted, lat, lng = predict_landmark_custom_model(str(file_path))
     return {"name": predicted, "lat": lat, "lng": lng}
 
 @app.post("/generate_summary/")
 async def generate_summary(landmark: str = Form(...), language: str = Form("en")):
+    language = language if language in ALLOWED_LANGUAGES else "en"
     summary = get_openai_summary(landmark, language)
-    audio_path = f"{UPLOAD_FOLDER}/summary_{landmark}_{language}.mp3"
-    audio_file = generate_audio_summary(summary, language, save_path=audio_path)
-    return {"summary": summary, "audio_file": audio_path}
+    audio_filename = safe_audio_filename(landmark, language)
+    audio_path = UPLOAD_FOLDER / audio_filename
+    generate_audio_summary(summary, language, save_path=str(audio_path))
+    return {"summary": summary, "audio_file": audio_filename}
 
-@app.get("/download_audio/")
-async def download_audio(path: str):
-    return FileResponse(path)
+@app.get("/download_audio/{filename}")
+async def download_audio(filename: str):
+    return FileResponse(resolve_upload_file(filename), media_type="audio/mpeg")
 
 @app.get("/nearby_places/")
 async def nearby_places(lat: float, lng: float):
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="Invalid coordinates")
     results = find_nearby_places(lat, lng)
     return results
 
 @app.get("/generate_map/")
 async def generate_map(lat: float, lng: float):
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="Invalid coordinates")
     results = find_nearby_places(lat, lng)
     map_ = generate_custom_leaflet_map_from_api_output(results)
-    map_path = f"{UPLOAD_FOLDER}/leaflet_map.html"
+    map_path = UPLOAD_FOLDER / f"leaflet_map_{uuid.uuid4().hex}.html"
     map_.save(map_path)
     return FileResponse(map_path)
 
@@ -264,7 +381,6 @@ async def create_trip(request: Request, current_user: Dict = Depends(get_current
         try:
             body = await request.json()
         except Exception as e:
-            print(f"Failed to parse request body: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Invalid request body: {str(e)}")
         
         # Validate required fields
@@ -286,39 +402,28 @@ async def create_trip(request: Request, current_user: Dict = Depends(get_current
             "created_at": "now()"
         }
         
-        # Explicitly log the data for debugging
-        print(f"Creating trip with data: {new_trip}")
-        
         try:
             response = supabase.table('trips').insert(new_trip).execute()
             if not response.data or len(response.data) == 0:
-                print(f"Supabase error: {response}")
                 raise HTTPException(status_code=500, detail="Failed to create trip in database")
         except Exception as db_error:
-            print(f"Database error: {str(db_error)}")
-            raise HTTPException(status_code=500, detail=f"Database error: {str(db_error)}")
+            raise HTTPException(status_code=500, detail="Database error")
             
         return response.data[0]
     except HTTPException:
         # Re-raise HTTP exceptions to preserve status codes
         raise
     except Exception as e:
-        print(f"Error creating trip: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Server error")
 
 @app.get("/trips")
 async def get_user_trips(current_user: Dict = Depends(get_current_user)):
     """Get all trips for the current user"""
     try:
-        # Log user info for debugging
-        print(f"Fetching trips for user: {current_user['user_id']}")
-        
         response = supabase.table('trips').select('*').eq('user_id', current_user["user_id"]).order('created_at', desc=True).execute()
-        print(f"Found {len(response.data)} trips")
         return response.data
     except Exception as e:
-        print(f"Error fetching trips: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch trips")
 
 @app.get("/trips/{trip_id}")
 async def get_trip_details(trip_id: str, current_user: Dict = Depends(get_current_user)):
@@ -359,7 +464,7 @@ async def update_trip(trip_id: str, request: Request, current_user: Dict = Depen
         update_data["updated_at"] = "now()"
         
         # Update the trip
-        response = supabase.table('trips').update(update_data).eq('trip_id', trip_id).execute()
+        response = supabase.table('trips').update(update_data).eq('trip_id', trip_id).eq('user_id', current_user["user_id"]).execute()
         return response.data[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -374,7 +479,7 @@ async def delete_trip(trip_id: str, current_user: Dict = Depends(get_current_use
             raise HTTPException(status_code=404, detail="Trip not found or does not belong to user")
         
         # Delete the trip
-        supabase.table('trips').delete().eq('trip_id', trip_id).execute()
+        supabase.table('trips').delete().eq('trip_id', trip_id).eq('user_id', current_user["user_id"]).execute()
         
         return {"message": "Trip deleted successfully"}
     except Exception as e:
@@ -410,26 +515,20 @@ async def complete_trip(trip_id: str, current_user: Dict = Depends(get_current_u
             raise HTTPException(status_code=500, detail="Failed to create journey record")
             
         # Delete the trip from trips table
-        supabase.table('trips').delete().eq('trip_id', trip_id).execute()
+        supabase.table('trips').delete().eq('trip_id', trip_id).eq('user_id', current_user["user_id"]).execute()
         
         return {"message": "Trip marked as completed and moved to journeys", "journey_id": journey_data["journey_id"]}
     except Exception as e:
-        print(f"Error completing trip: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to complete trip")
 
 @app.get("/journeys/history")
 async def get_journey_history(current_user: Dict = Depends(get_current_user)):
     """Get all completed journeys for the current user"""
     try:
-        # Log user info for debugging
-        print(f"Fetching journey history for user: {current_user['user_id']}")
-        
         response = supabase.table('journeys').select('*').eq('user_id', current_user["user_id"]).order('created_at', desc=True).execute()
-        print(f"Found {len(response.data)} journeys")
         return response.data
     except Exception as e:
-        print(f"Error fetching journey history: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch journey history")
 
 # Run the application  
 if __name__ == "__main__":

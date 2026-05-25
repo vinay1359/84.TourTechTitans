@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Mic, Volume2, Globe, Send, X } from "lucide-react";
+import { useState } from "react";
+import { Mic, Globe, Send, X } from "lucide-react";
 
 type Language = "en" | "hi" | "kn" | "ta" | "te";
 
@@ -10,6 +10,35 @@ interface ChatEntry {
   response: string;
   audioUrl: string;
 }
+
+interface SpeechRecognitionResultEventLike {
+  results: {
+    [index: number]: {
+      [index: number]: {
+        transcript: string;
+      };
+    };
+  };
+}
+
+type SpeechRecognitionInstance = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
+
+type SpeechRecognitionWindow = Window &
+  typeof globalThis & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
 
 const languageMap: Record<Language, string> = {
   en: "English",
@@ -29,8 +58,8 @@ export default function GuideChatClient() {
   // 🎤 Handle speech-to-text
   const handleVoiceInput = () => {
     const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
+      (window as SpeechRecognitionWindow).SpeechRecognition ||
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       alert("Speech recognition not supported. Try Chrome or Edge.");
@@ -45,7 +74,7 @@ export default function GuideChatClient() {
     recognition.onstart = () => setIsListening(true);
     recognition.onend = () => setIsListening(false);
 
-    recognition.onresult = (e: any) => {
+    recognition.onresult = (e) => {
       const spoken = e.results[0][0].transcript;
       setQuery(spoken);
     };
@@ -60,7 +89,7 @@ export default function GuideChatClient() {
     setLoading(true);
 
     try {
-      const res = await fetch("http://localhost:8000/api/ask", {
+      const res = await fetch("/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: query, language: selectedLanguage }),
@@ -69,8 +98,8 @@ export default function GuideChatClient() {
       const data = await res.json();
       const newEntry: ChatEntry = {
         query,
-        response: data.text,
-        audioUrl: data.audio_url,
+        response: data.result || data.text || "No response returned.",
+        audioUrl: data.audio_url || "",
       };
       setChatHistory((prev) => [...prev, newEntry]);
       setQuery("");
@@ -157,7 +186,7 @@ export default function GuideChatClient() {
             {entry.audioUrl && (
               <audio controls className="w-full mt-2">
                 <source
-                  src={`http://localhost:8000${entry.audioUrl}`}
+                  src={entry.audioUrl}
                   type="audio/mpeg"
                 />
                 Your browser does not support the audio element.

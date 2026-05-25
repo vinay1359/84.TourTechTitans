@@ -1,54 +1,42 @@
-const API_URL = "http://localhost:5000";
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
+  "http://localhost:5000";
 
 export async function fetchWithAuth(
   endpoint: string,
   options: RequestInit = {}
 ) {
-  const token = localStorage.getItem("authToken");
+  const headers = new Headers(options.headers);
+  const hasBody = options.body !== undefined && options.body !== null;
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
 
-  if (!token) {
-    throw new Error("No authentication token found. Please log in.");
+  if (hasBody && !isFormData && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
-  const headers = {
-    ...(options.headers as Record<string, string>),
-    Authorization: `Bearer ${token}`,
-    "Content-Type":
-      (options.headers as Record<string, string>)?.["Content-Type"] ||
-      "application/json",
-  };
-
   try {
-    console.log(`Making request to: ${API_URL}${endpoint}`);
-
     const response = await fetch(`${API_URL}${endpoint}`, {
       ...options,
       headers,
+      credentials: "include",
     });
 
     if (!response.ok) {
       let errorMessage = "API request failed";
-      let errorDetails = "";
 
       try {
         const errorData = await response.json();
         errorMessage = errorData.detail || errorData.message || errorMessage;
-        errorDetails = JSON.stringify(errorData);
-      } catch (e) {
-        console.log("Error parsing error response:", e);
+      } catch {
         // Fallback to response text if JSON parsing fails
         try {
-          errorDetails = await response.text();
+          await response.text();
         } catch {
           // Ignore error - can't get text error details
-          errorDetails = "Unable to get error details";
         }
       }
 
-      console.error(
-        `API Error (${response.status}): ${errorMessage}`,
-        errorDetails
-      );
       throw new Error(`${errorMessage} (Status: ${response.status})`);
     }
 

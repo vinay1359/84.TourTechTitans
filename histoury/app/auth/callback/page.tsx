@@ -2,22 +2,16 @@
 
 import { useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function AuthCallback() {
   const { setAuthToken } = useAuth();
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
-    const token = searchParams.get("token");
-    if (token) {
-      setAuthToken(token);
-      router.push("/my-journey");
-    } else {
-      router.push("/login");
-    }
-  }, [searchParams, setAuthToken, router]);
+    setAuthToken();
+    router.push("/my-journey");
+  }, [setAuthToken, router]);
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-amber-50">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { API_URL } from "@/app/utils/api";
 
 const languageMap: { [key: string]: string } = {
   english: "en",
@@ -33,9 +34,10 @@ export default function StoryNarrator({
     formData.append("language", languageMap[language]);
 
     try {
-      const res = await fetch("http://localhost:8000/generate_summary/", {
+      const res = await fetch(`${API_URL}/generate_summary/`, {
         method: "POST",
         body: formData,
+        credentials: "include",
       });
       const data = await res.json();
       setStory(data.summary || "No summary returned.");
@@ -45,17 +47,6 @@ export default function StoryNarrator({
       setStory("Failed to fetch summary.");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleSpeak = () => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      const utterance = new SpeechSynthesisUtterance(story);
-      utterance.lang = languageMap[language];
-      window.speechSynthesis.cancel(); // Stop any current speech
-      window.speechSynthesis.speak(utterance);
-    } else {
-      alert("Speech synthesis not supported in this browser.");
     }
   };
 
@@ -112,7 +103,7 @@ export default function StoryNarrator({
           <audio
             ref={audioRef}
             controls
-            src={`http://localhost:8000/download_audio/?path=${encodeURIComponent(
+            src={`${API_URL}/download_audio/${encodeURIComponent(
               audioPath
             )}`}
             className="w-full max-w-md mx-auto"
